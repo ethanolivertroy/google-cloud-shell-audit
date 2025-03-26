@@ -546,6 +546,69 @@ EOF
 EOF
   ))
   
+  # 2.3 Container runtime privileges and security profiles
+  # Check GKE clusters for Pod Security Standards and restricted profiles
+  if [[ -n "$clusters" ]]; then
+    local pss_enabled=false
+    local seccomp_default=false
+    local podsecurity_admission=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for Pod Security Standards or PSPs
+        local psp_exists=$(kubectl get podsecuritypolicies 2>/dev/null)
+        local pss_policies=$(kubectl get ns -o yaml 2>/dev/null | grep "pod-security.kubernetes.io/enforce: restricted")
+        
+        if [[ -n "$psp_exists" || -n "$pss_policies" ]]; then
+          pss_enabled=true
+        fi
+        
+        # Check for seccomp profiles
+        local seccomp_profiles=$(kubectl get nodes -o yaml 2>/dev/null | grep "seccompDefault: true")
+        if [[ -n "$seccomp_profiles" ]]; then
+          seccomp_default=true
+        fi
+        
+        # Check for PodSecurity admission controller
+        local pod_security_admission=$(kubectl get ns -o yaml 2>/dev/null | grep "pod-security.kubernetes.io")
+        if [[ -n "$pod_security_admission" ]]; then
+          podsecurity_admission=true
+        fi
+      fi
+    done
+    
+    if [[ "$pss_enabled" == true && ("$seccomp_default" == true || "$podsecurity_admission" == true) ]]; then
+      status="PASS"
+      result="Container runtime security is enforced with Pod Security Standards/Policies and security profiles."
+    elif [[ "$pss_enabled" == true ]]; then
+      status="WARN"
+      result="Basic Pod Security Standards/Policies are implemented, but additional security profiles may be missing."
+    else
+      status="FAIL"
+      result="Container runtime security lacks Pod Security Standards/Policies and security profiles."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for container runtime security check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-2.3",
+    "description": "Container runtime privileges are restricted with security profiles",
+    "controls": "NIST-800-190-4.2.3,AC-6,CM-7,SI-7",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result", 
+    "remediation": "Implement Pod Security Standards in 'restricted' mode and enable seccomp profiles."
+  }
+EOF
+  ))
+  
   # ================ 3. ORCHESTRATOR SECURITY ================
   
   # 3.1 Orchestrator authentication and authorization
@@ -647,6 +710,79 @@ EOF
     "status": "$status",
     "result": "$result",
     "remediation": "Enable network policies and configure private GKE clusters."
+  }
+EOF
+  ))
+  
+  # 3.3 Service mesh and mTLS
+  # Check if Anthos Service Mesh or Istio is configured for mTLS
+  if [[ -n "$clusters" ]]; then
+    local mtls_enabled=false
+    local service_mesh_exists=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for Anthos Service Mesh or Istio
+        local asm_namespace=$(kubectl get namespace asm-system 2>/dev/null)
+        local istio_namespace=$(kubectl get namespace istio-system 2>/dev/null)
+        
+        if [[ -n "$asm_namespace" || -n "$istio_namespace" ]]; then
+          service_mesh_exists=true
+          
+          # Check for PeerAuthentication with mTLS
+          local mesh_namespace="istio-system"
+          if [[ -n "$asm_namespace" ]]; then
+            mesh_namespace="asm-system"
+          fi
+          
+          # Check for strict mTLS policy
+          local peer_auth=$(kubectl get peerauthentication -n "$mesh_namespace" -o jsonpath="{.items[*].spec.mtls.mode}" 2>/dev/null | grep "STRICT")
+          if [[ -n "$peer_auth" ]]; then
+            mtls_enabled=true
+            break
+          fi
+          
+          # Alternative check for mesh-wide mTLS
+          local mesh_config=$(kubectl get configmap -n "$mesh_namespace" istio -o jsonpath="{.data.mesh}" 2>/dev/null | grep "enableAutoMtls: true")
+          if [[ -n "$mesh_config" ]]; then
+            mtls_enabled=true
+            break
+          fi
+        fi
+      fi
+    done
+    
+    if [[ "$service_mesh_exists" == true && "$mtls_enabled" == true ]]; then
+      status="PASS"
+      result="Service mesh is configured with mutual TLS (mTLS) for secure pod-to-pod communication."
+    elif [[ "$service_mesh_exists" == true ]]; then
+      status="WARN"
+      result="Service mesh exists but mutual TLS (mTLS) may not be properly configured."
+    elif [[ -n "$clusters" ]]; then
+      status="FAIL"
+      result="No service mesh with mutual TLS (mTLS) capability detected for container traffic security."
+    else
+      status="INFO"
+      result="No clusters found for service mesh mTLS verification."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for service mesh mTLS check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-3.3",
+    "description": "Container service mesh with mutual TLS (mTLS) enabled",
+    "controls": "NIST-800-190-4.3.3,SC-8,SC-13,IA-3",
+    "severity": "High", 
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement Anthos Service Mesh or Istio with strict mTLS policies for all pod-to-pod communication."
   }
 EOF
   ))

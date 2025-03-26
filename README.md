@@ -144,10 +144,10 @@ The script performs checks across the following control families:
 - **Access Approval**: Admin access validation
 - **NIST SP 800-190**: Container security compliance validation
   - Image security (vulnerability scanning, configuration, base image sourcing)
-  - Container runtime security (vulnerability monitoring, resource limitations)
-  - Orchestrator security (authentication, authorization, segmentation)
+  - Container runtime security (vulnerability monitoring, resource limitations, privilege restrictions)
+  - Orchestrator security (authentication, authorization, segmentation, mTLS)
   - Host OS security (hardening, access restrictions)
-  - Container supply chain security (build pipeline security)
+  - Container supply chain security (build pipeline security, vulnerability scanning)
 
 ## Exported Evidence and Configuration Data
 
@@ -181,10 +181,11 @@ When run with the `--export-evidence` flag, additional artifacts are collected:
    - Traceable timestamp for each evidence artifact
    - Dedicated NIST SP 800-190 container security evidence section with:
      - Container image vulnerability scanning results
-     - Container runtime security configurations
+     - Container runtime security configurations and privilege control evidence
      - GKE cluster security settings
-     - Orchestrator security evidence
+     - Orchestrator security evidence including mTLS configuration
      - Host OS hardening evidence
+     - Pod Security Standards implementation details
      - Container supply chain security artifacts
 
 2. **FedRAMP Documentation Artifacts**:
