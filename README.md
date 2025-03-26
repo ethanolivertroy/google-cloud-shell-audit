@@ -142,12 +142,17 @@ The script performs checks across the following control families:
 - **Workload Identity**: Service authentication validation
 - **Organization Policy**: Constraint verification
 - **Access Approval**: Admin access validation
-- **NIST SP 800-190**: Container security compliance validation
+- **NIST SP 800-190**: Comprehensive container security compliance validation
   - Image security (vulnerability scanning, configuration, base image sourcing)
   - Container runtime security (vulnerability monitoring, resource limitations, privilege restrictions)
   - Orchestrator security (authentication, authorization, segmentation, mTLS, admission controllers)
   - Host OS security (hardening, access restrictions)
   - Container supply chain security (build pipeline security, vulnerability scanning)
+  - Runtime application self-protection (RASP) for containers
+  - Container-specific logging and monitoring
+  - Container network policy enforcement
+  - Container secrets management
+  - Container-specific incident response
 
 ## Exported Evidence and Configuration Data
 
@@ -188,6 +193,11 @@ When run with the `--export-evidence` flag, additional artifacts are collected:
      - Host OS hardening evidence
      - Pod Security Standards implementation details
      - Container supply chain security artifacts
+     - Runtime Application Self-Protection (RASP) evidence
+     - Container-specific logging and monitoring configurations
+     - Container network policy enforcement details
+     - Container secrets management implementation
+     - Container incident response capabilities
 
 2. **FedRAMP Documentation Artifacts**:
    - Control coverage summaries formatted for FedRAMP packages
@@ -203,12 +213,17 @@ When using the SSP template option:
    - Actual configuration evidence linked to controls
    - Implementation details for each control family
    - Gap analysis for missing controls
-   - Specific NIST SP 800-190 container security implementation details including:
+   - Comprehensive NIST SP 800-190 container security implementation details including:
      - Container image security controls
      - Container runtime security controls
      - Container orchestration security controls
      - Host OS security controls
      - Container supply chain security controls
+     - Runtime application self-protection controls
+     - Container logging and monitoring controls
+     - Container network security controls
+     - Container secrets management controls
+     - Container incident response controls
 
 ### Output Structure
 

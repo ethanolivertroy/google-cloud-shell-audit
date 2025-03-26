@@ -1023,6 +1023,350 @@ EOF
 EOF
   ))
   
+  # ================ 6. CONTAINER RUNTIME PROTECTION ================
+  
+  # 6.1 Runtime Application Self-Protection (RASP)
+  # Check for runtime application protection tools
+  if [[ -n "$clusters" ]]; then
+    local rasp_solution=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for common RASP solutions
+        # Check for Aqua Security
+        local aqua_ns=$(kubectl get ns aqua 2>/dev/null)
+        local aqua_pods=$(kubectl get pods -n aqua --no-headers 2>/dev/null | wc -l)
+        
+        # Check for Sysdig Secure
+        local sysdig_ns=$(kubectl get ns sysdig-agent 2>/dev/null)
+        local sysdig_pods=$(kubectl get pods -n sysdig-agent --no-headers 2>/dev/null | wc -l)
+        
+        # Check for Falco
+        local falco_pods=$(kubectl get pods --all-namespaces -l app=falco --no-headers 2>/dev/null | wc -l)
+        
+        # Check for StackRox/ACS
+        local stackrox_ns=$(kubectl get ns stackrox 2>/dev/null)
+        local acs_ns=$(kubectl get ns stackrox 2>/dev/null)
+        
+        if [[ -n "$aqua_ns" && "$aqua_pods" -gt 0 ]] || \
+           [[ -n "$sysdig_ns" && "$sysdig_pods" -gt 0 ]] || \
+           [[ "$falco_pods" -gt 0 ]] || \
+           [[ -n "$stackrox_ns" ]] || [[ -n "$acs_ns" ]]; then
+          rasp_solution=true
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$rasp_solution" == true ]]; then
+      status="PASS"
+      result="Runtime Application Self-Protection (RASP) solution is implemented for container workloads."
+    else
+      status="FAIL"
+      result="No Runtime Application Self-Protection (RASP) solution detected for container workloads."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for RASP security check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-6.1",
+    "description": "Runtime Application Self-Protection (RASP) for container workloads",
+    "controls": "NIST-800-190-4.2.4,SI-4,SI-10,SC-7",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement a container runtime protection solution like Aqua Security, Sysdig Secure, Falco, or Google Container Security."
+  }
+EOF
+  ))
+  
+  # ================ 7. CONTAINER LOGGING AND MONITORING ================
+  
+  # 7.1 Container-specific logging
+  if [[ -n "$clusters" ]]; then
+    local container_logging=false
+    local cloud_logging_enabled=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check if Cloud Logging is enabled for the cluster
+        local logging_config=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(loggingService)" 2>/dev/null)
+        if [[ "$logging_config" == "logging.googleapis.com/kubernetes" ]]; then
+          cloud_logging_enabled=true
+        fi
+        
+        # Check for logging solutions
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for fluent-bit, fluentd, or other logging agents
+        local fluentbit=$(kubectl get pods --all-namespaces -l app=fluent-bit --no-headers 2>/dev/null | wc -l)
+        local fluentd=$(kubectl get pods --all-namespaces -l app=fluentd --no-headers 2>/dev/null | wc -l)
+        local elastic=$(kubectl get pods --all-namespaces -l app=elasticsearch --no-headers 2>/dev/null | wc -l)
+        
+        if [[ "$fluentbit" -gt 0 ]] || [[ "$fluentd" -gt 0 ]] || [[ "$elastic" -gt 0 ]] || [[ "$cloud_logging_enabled" == true ]]; then
+          container_logging=true
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$container_logging" == true ]]; then
+      status="PASS"
+      result="Container-specific logging is properly configured."
+    else
+      status="FAIL"
+      result="Container-specific logging is not properly configured."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for container logging check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-7.1",
+    "description": "Container-specific logging is implemented",
+    "controls": "NIST-800-190-4.5.1,AU-2,AU-3,AU-12,SI-4",
+    "severity": "Medium",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable Cloud Logging for GKE or implement a container-specific logging solution."
+  }
+EOF
+  ))
+  
+  # 7.2 Container monitoring
+  if [[ -n "$clusters" ]]; then
+    local container_monitoring=false
+    local cloud_monitoring_enabled=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check if Cloud Monitoring is enabled for the cluster
+        local monitoring_config=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(monitoringService)" 2>/dev/null)
+        if [[ "$monitoring_config" == "monitoring.googleapis.com/kubernetes" ]]; then
+          cloud_monitoring_enabled=true
+        fi
+        
+        # Check for monitoring solutions
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for prometheus, datadog, or other monitoring agents
+        local prometheus=$(kubectl get pods --all-namespaces -l app=prometheus --no-headers 2>/dev/null | wc -l)
+        local datadog=$(kubectl get pods --all-namespaces -l app=datadog --no-headers 2>/dev/null | wc -l)
+        local grafana=$(kubectl get pods --all-namespaces -l app=grafana --no-headers 2>/dev/null | wc -l)
+        
+        if [[ "$prometheus" -gt 0 ]] || [[ "$datadog" -gt 0 ]] || [[ "$grafana" -gt 0 ]] || [[ "$cloud_monitoring_enabled" == true ]]; then
+          container_monitoring=true
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$container_monitoring" == true ]]; then
+      status="PASS"
+      result="Container monitoring is properly configured."
+    else
+      status="FAIL"
+      result="Container monitoring is not properly configured."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for container monitoring check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-7.2",
+    "description": "Container monitoring is implemented",
+    "controls": "NIST-800-190-4.5.2,CA-7,SI-4,AU-6",
+    "severity": "Medium",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable Cloud Monitoring for GKE or implement a container-specific monitoring solution like Prometheus."
+  }
+EOF
+  ))
+  
+  # ================ 8. CONTAINER NETWORK SECURITY ================
+  
+  # 8.1 Container network policy enforcement
+  if [[ -n "$clusters" ]]; then
+    local network_policy_enabled=false
+    local detailed_policies=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check if network policy is enabled for the cluster
+        local np_enabled=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(networkPolicy.enabled)" 2>/dev/null)
+        if [[ "$np_enabled" == "true" ]]; then
+          network_policy_enabled=true
+          
+          # Check for specific NetworkPolicy resources
+          gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+          local network_policies=$(kubectl get networkpolicies --all-namespaces --no-headers 2>/dev/null | wc -l)
+          
+          if [[ "$network_policies" -gt 0 ]]; then
+            detailed_policies=true
+          fi
+        fi
+      fi
+    done
+    
+    if [[ "$network_policy_enabled" == true && "$detailed_policies" == true ]]; then
+      status="PASS"
+      result="Container network policy enforcement is properly configured with specific policies."
+    elif [[ "$network_policy_enabled" == true ]]; then
+      status="WARN"
+      result="Container network policy is enabled but lacks specific policy definitions."
+    else
+      status="FAIL"
+      result="Container network policy enforcement is not enabled."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for network policy check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-8.1",
+    "description": "Container network policy enforcement",
+    "controls": "NIST-800-190-4.3.2,SC-7,AC-4,AC-17",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable network policy and define specific NetworkPolicy resources to control pod-to-pod communication."
+  }
+EOF
+  ))
+  
+  # ================ 9. CONTAINER SECRETS MANAGEMENT ================
+  
+  # 9.1 Secrets management for containers
+  if [[ -n "$clusters" ]]; then
+    local secrets_management=false
+    local external_secret_manager=false
+    
+    # Check for Secret Manager API
+    local secret_manager=$(gcloud services list --project="$project" --filter="config.name=secretmanager.googleapis.com" --format="value(config.name)" 2>/dev/null)
+    if [[ -n "$secret_manager" ]]; then
+      external_secret_manager=true
+    fi
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for external secret managers integration
+        local external_secrets=$(kubectl get pods --all-namespaces -l app=external-secrets --no-headers 2>/dev/null | wc -l)
+        local secrets_store_csi=$(kubectl get pods --all-namespaces -l app=secrets-store-csi-driver --no-headers 2>/dev/null | wc -l)
+        local vault=$(kubectl get pods --all-namespaces -l app=vault --no-headers 2>/dev/null | wc -l)
+        
+        # Check for proper use of Kubernetes Secrets
+        local k8s_secrets=$(kubectl get secrets --all-namespaces --no-headers 2>/dev/null | wc -l)
+        
+        if [[ "$external_secrets" -gt 0 ]] || [[ "$secrets_store_csi" -gt 0 ]] || [[ "$vault" -gt 0 ]] || [[ "$external_secret_manager" == true && "$k8s_secrets" -gt 0 ]]; then
+          secrets_management=true
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$secrets_management" == true ]]; then
+      status="PASS"
+      result="Container secrets management is properly configured with external secret management."
+    else
+      status="FAIL"
+      result="Container secrets management is not properly configured."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for secrets management check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-9.1",
+    "description": "Container secrets management",
+    "controls": "NIST-800-190-4.2.5,IA-5,SC-12,SC-28",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement Google Secret Manager or other external secrets management solution with proper Kubernetes integration."
+  }
+EOF
+  ))
+  
+  # ================ 10. CONTAINER INCIDENT RESPONSE ================
+  
+  # 10.1 Container-specific incident response
+  # Check for incident response and forensics capabilities
+  if [[ -n "$clusters" ]]; then
+    local incident_response=false
+    local gcp_security_cmd_center=false
+    
+    # Check if Security Command Center is enabled
+    local scc_enabled=$(gcloud services list --project="$project" --filter="config.name=securitycenter.googleapis.com" --format="value(config.name)" 2>/dev/null)
+    if [[ -n "$scc_enabled" ]]; then
+      gcp_security_cmd_center=true
+    fi
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for incident response tools
+        local falco=$(kubectl get pods --all-namespaces -l app=falco --no-headers 2>/dev/null | wc -l)
+        local twistlock=$(kubectl get pods --all-namespaces -l app=twistlock --no-headers 2>/dev/null | wc -l)
+        local sysdig=$(kubectl get pods --all-namespaces -l app=sysdig --no-headers 2>/dev/null | wc -l)
+        
+        if [[ "$falco" -gt 0 ]] || [[ "$twistlock" -gt 0 ]] || [[ "$sysdig" -gt 0 ]] || [[ "$gcp_security_cmd_center" == true ]]; then
+          incident_response=true
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$incident_response" == true ]]; then
+      status="PASS"
+      result="Container-specific incident response capabilities are configured."
+    else
+      status="FAIL"
+      result="Container-specific incident response capabilities are not detected."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for incident response check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-10.1",
+    "description": "Container-specific incident response",
+    "controls": "NIST-800-190-4.6.1,IR-4,IR-5,SI-4",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement container-specific incident response tools and integrate with Security Command Center."
+  }
+EOF
+  ))
+  
   # Convert all checks to JSON array
   local json_checks=$(for check in "${checks[@]}"; do echo "$check"; done | jq -s .)
   echo "$json_checks"
