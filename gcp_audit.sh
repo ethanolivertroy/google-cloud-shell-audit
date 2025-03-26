@@ -787,6 +787,82 @@ EOF
 EOF
   ))
   
+  # 3.4 Kubernetes admission controllers
+  # Check for validating and mutating admission controllers
+  if [[ -n "$clusters" ]]; then
+    local admission_controllers=false
+    local policy_enforcement=false
+    local opa_gatekeeper=false
+    local kyverno=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials for the cluster
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        
+        # Check for validating/mutating webhook configurations
+        local validating_webhooks=$(kubectl get validatingwebhookconfigurations 2>/dev/null)
+        local mutating_webhooks=$(kubectl get mutatingwebhookconfigurations 2>/dev/null)
+        
+        if [[ -n "$validating_webhooks" || -n "$mutating_webhooks" ]]; then
+          admission_controllers=true
+        fi
+        
+        # Check for OPA Gatekeeper
+        local gatekeeper_ns=$(kubectl get ns gatekeeper-system 2>/dev/null)
+        local gatekeeper_pods=$(kubectl get pods -n gatekeeper-system 2>/dev/null)
+        
+        if [[ -n "$gatekeeper_ns" && -n "$gatekeeper_pods" ]]; then
+          opa_gatekeeper=true
+          policy_enforcement=true
+        fi
+        
+        # Check for Kyverno
+        local kyverno_ns=$(kubectl get ns kyverno 2>/dev/null)
+        local kyverno_pods=$(kubectl get pods -n kyverno 2>/dev/null)
+        
+        if [[ -n "$kyverno_ns" && -n "$kyverno_pods" ]]; then
+          kyverno=true
+          policy_enforcement=true
+        fi
+        
+        # Check for Binary Authorization in GKE
+        local binary_auth=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(binaryAuthorization.enabled)" 2>/dev/null)
+        if [[ "$binary_auth" == "true" ]]; then
+          policy_enforcement=true
+        fi
+      fi
+    done
+    
+    if [[ "$admission_controllers" == true && "$policy_enforcement" == true ]]; then
+      status="PASS"
+      result="Kubernetes admission controllers are properly configured with policy enforcement ($([ "$opa_gatekeeper" == true ] && echo "OPA Gatekeeper, ")$([ "$kyverno" == true ] && echo "Kyverno, ")Binary Authorization)."
+    elif [[ "$admission_controllers" == true ]]; then
+      status="WARN"
+      result="Kubernetes admission controllers exist but may lack robust policy enforcement mechanisms."
+    else
+      status="FAIL"
+      result="Kubernetes admission controllers are not properly configured for security enforcement."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for admission controller check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-3.4",
+    "description": "Kubernetes admission controllers enforce security policies",
+    "controls": "NIST-800-190-4.3.4,CM-7,CM-14,CM-4,SA-10",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement policy enforcement with OPA Gatekeeper or Kyverno, and configure appropriate validating/mutating admission controllers."
+  }
+EOF
+  ))
+  
   # ================ 4. HOST OS SECURITY ================
   
   # 4.1 Host OS hardening

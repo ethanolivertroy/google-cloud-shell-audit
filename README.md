@@ -145,7 +145,7 @@ The script performs checks across the following control families:
 - **NIST SP 800-190**: Container security compliance validation
   - Image security (vulnerability scanning, configuration, base image sourcing)
   - Container runtime security (vulnerability monitoring, resource limitations, privilege restrictions)
-  - Orchestrator security (authentication, authorization, segmentation, mTLS)
+  - Orchestrator security (authentication, authorization, segmentation, mTLS, admission controllers)
   - Host OS security (hardening, access restrictions)
   - Container supply chain security (build pipeline security, vulnerability scanning)
 
@@ -184,6 +184,7 @@ When run with the `--export-evidence` flag, additional artifacts are collected:
      - Container runtime security configurations and privilege control evidence
      - GKE cluster security settings
      - Orchestrator security evidence including mTLS configuration
+     - Kubernetes admission controller policies and configurations
      - Host OS hardening evidence
      - Pod Security Standards implementation details
      - Container supply chain security artifacts
