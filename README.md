@@ -142,6 +142,12 @@ The script performs checks across the following control families:
 - **Workload Identity**: Service authentication validation
 - **Organization Policy**: Constraint verification
 - **Access Approval**: Admin access validation
+- **NIST SP 800-190**: Container security compliance validation
+  - Image security (vulnerability scanning, configuration, base image sourcing)
+  - Container runtime security (vulnerability monitoring, resource limitations)
+  - Orchestrator security (authentication, authorization, segmentation)
+  - Host OS security (hardening, access restrictions)
+  - Container supply chain security (build pipeline security)
 
 ## Exported Evidence and Configuration Data
 
@@ -173,6 +179,13 @@ When run with the `--export-evidence` flag, additional artifacts are collected:
    - Configuration snapshots supporting each control
    - Direct command outputs from assessment checks
    - Traceable timestamp for each evidence artifact
+   - Dedicated NIST SP 800-190 container security evidence section with:
+     - Container image vulnerability scanning results
+     - Container runtime security configurations
+     - GKE cluster security settings
+     - Orchestrator security evidence
+     - Host OS hardening evidence
+     - Container supply chain security artifacts
 
 2. **FedRAMP Documentation Artifacts**:
    - Control coverage summaries formatted for FedRAMP packages
@@ -188,6 +201,12 @@ When using the SSP template option:
    - Actual configuration evidence linked to controls
    - Implementation details for each control family
    - Gap analysis for missing controls
+   - Specific NIST SP 800-190 container security implementation details including:
+     - Container image security controls
+     - Container runtime security controls
+     - Container orchestration security controls
+     - Host OS security controls
+     - Container supply chain security controls
 
 ### Output Structure
 

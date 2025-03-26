@@ -71,6 +71,9 @@ generate_compliance_report() {
   echo -e "${CYAN}Running Supply Chain Security checks...${NC}"
   local supply_chain_checks=$(check_supply_chain "$project")
   
+  echo -e "${CYAN}Running NIST SP 800-190 Container Security checks...${NC}"
+  local container_800_190_checks=$(check_container_800_190 "$project")
+  
   echo -e "${CYAN}Running Backup and Recovery checks...${NC}"
   local backup_recovery_checks=$(check_backup_recovery "$project")
   
@@ -118,6 +121,7 @@ generate_compliance_report() {
       \"org_policies\": $org_policy_checks,
       \"binary_auth\": $binary_auth_checks,
       \"supply_chain\": $supply_chain_checks,
+      \"container_800_190\": $container_800_190_checks,
       \"backup_recovery\": $backup_recovery_checks,
       \"custom\": $custom_checks
     }
@@ -370,6 +374,446 @@ EOF
   if [ "$EXPORT_EVIDENCE" == "true" ]; then
     generate_evidence_collection "$project"
   fi
+}
+
+# Function to check NIST SP 800-190 Container Security compliance
+check_container_800_190() {
+  local project="$1"
+  echo -e "${CYAN}Running NIST SP 800-190 Container Security checks...${NC}"
+  
+  local checks=()
+  local result=""
+  local status=""
+  
+  # ================ 1. IMAGE SECURITY SECTION ================
+  
+  # 1.1 Image vulnerability scanning
+  result=$(gcloud container images list --repository=gcr.io/$project 2>/dev/null | grep -v "NAME" || echo "")
+  if [[ -n "$result" ]]; then
+    # Check if Artifact Analysis (Container Analysis) API is enabled
+    local api_enabled=$(gcloud services list --project="$project" --filter="config.name=containeranalysis.googleapis.com" --format="value(config.name)" 2>/dev/null)
+    if [[ -n "$api_enabled" ]]; then
+      status="PASS"
+      result="Container Analysis API is enabled for vulnerability scanning."
+    else
+      status="FAIL"
+      result="Container Analysis API is not enabled for vulnerability scanning."
+    fi
+  else
+    status="INFO"
+    result="No container images found for vulnerability scanning check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-1.1",
+    "description": "Container images are automatically scanned for vulnerabilities",
+    "controls": "NIST-800-190-4.1.1,SI-10,SI-7",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable Container Analysis API and configure automatic vulnerability scanning for container images."
+  }
+EOF
+  ))
+  
+  # 1.2 Image configuration security
+  # Check if Binary Authorization is enabled 
+  local binauth_enabled=$(gcloud services list --project="$project" --filter="config.name=binaryauthorization.googleapis.com" --format="value(config.name)" 2>/dev/null)
+  if [[ -n "$binauth_enabled" ]]; then
+    local binauth_policy=$(gcloud container binauthz policy export --project="$project" 2>/dev/null)
+    if [[ -n "$binauth_policy" ]] && [[ "$binauth_policy" != *"defaultAdmissionRule"*"evaluationMode: ALWAYS_ALLOW"* ]]; then
+      status="PASS"
+      result="Binary Authorization is enabled with enforcing policy."
+    else
+      status="WARN"
+      result="Binary Authorization is enabled but may not be enforcing signature verification."
+    fi
+  else
+    status="FAIL"
+    result="Binary Authorization is not enabled to enforce container image signing and verification."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-1.2",
+    "description": "Container image signature verification is enforced",
+    "controls": "NIST-800-190-4.1.2,CM-4,CM-14,SR-4",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable Binary Authorization and configure enforcement policies for container deployments."
+  }
+EOF
+  ))
+  
+  # 1.3 Base image sourcing
+  # Check if Artifact Registry is used for base images
+  local artifact_registry=$(gcloud services list --project="$project" --filter="config.name=artifactregistry.googleapis.com" --format="value(config.name)" 2>/dev/null)
+  if [[ -n "$artifact_registry" ]]; then
+    local private_repos=$(gcloud artifacts repositories list --project="$project" --format="value(name)" 2>/dev/null)
+    if [[ -n "$private_repos" ]]; then
+      status="PASS"
+      result="Artifact Registry is used for managing container images."
+    else
+      status="WARN"
+      result="Artifact Registry is enabled but no repositories configured."
+    fi
+  else
+    status="FAIL"
+    result="Artifact Registry is not enabled for secure base image management."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-1.3",
+    "description": "Base images are sourced from trusted, private registries",
+    "controls": "NIST-800-190-4.1.3,CM-2,SA-10,SR-3",
+    "severity": "Medium",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Configure Artifact Registry with private repositories for storing approved base images."
+  }
+EOF
+  ))
+  
+  # ================ 2. CONTAINER RUNTIME SECURITY ================
+  
+  # 2.1 Runtime vulnerability monitoring
+  # Check if Security Command Center is configured for container runtime monitoring
+  local scc_enabled=$(gcloud services list --project="$project" --filter="config.name=securitycenter.googleapis.com" --format="value(config.name)" 2>/dev/null)
+  if [[ -n "$scc_enabled" ]]; then
+    status="PASS"
+    result="Security Command Center is enabled for runtime vulnerability monitoring."
+  else
+    status="FAIL"
+    result="Security Command Center is not enabled for runtime container vulnerability monitoring."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-2.1",
+    "description": "Container runtime vulnerability monitoring is implemented",
+    "controls": "NIST-800-190-4.2.1,SI-4,SI-10,RA-5",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable Security Command Center and configure container runtime monitoring."
+  }
+EOF
+  ))
+  
+  # 2.2 Runtime resource limitations
+  # Check GKE clusters for resource quotas
+  local clusters=$(gcloud container clusters list --project="$project" --format="value(name)" 2>/dev/null)
+  if [[ -n "$clusters" ]]; then
+    local resource_quotas=""
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get credentials and check for resource quotas
+        gcloud container clusters get-credentials "$cluster" --zone="$zone" --project="$project" > /dev/null 2>&1
+        local namespace_quotas=$(kubectl get resourcequota --all-namespaces 2>/dev/null | grep -v "No resources found")
+        if [[ -n "$namespace_quotas" ]]; then
+          resource_quotas="yes"
+          break
+        fi
+      fi
+    done
+    
+    if [[ "$resource_quotas" == "yes" ]]; then
+      status="PASS"
+      result="Resource quotas are implemented for container runtimes."
+    else
+      status="FAIL"
+      result="Resource quotas are not implemented for container runtimes."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for resource quota check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-2.2",
+    "description": "Container runtime resource limitations are enforced",
+    "controls": "NIST-800-190-4.2.2,SC-6,CM-2",
+    "severity": "Medium",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Implement resource quotas and limits for all Kubernetes namespaces."
+  }
+EOF
+  ))
+  
+  # ================ 3. ORCHESTRATOR SECURITY ================
+  
+  # 3.1 Orchestrator authentication and authorization
+  # Check GKE clusters for RBAC and Workload Identity
+  if [[ -n "$clusters" ]]; then
+    local rbac_enabled=false
+    local workload_identity=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check RBAC
+        local cluster_rbac=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(legacyAbac.enabled)" 2>/dev/null)
+        # Inverted logic - legacyAbac=false means RBAC is enabled
+        if [[ "$cluster_rbac" == "false" || -z "$cluster_rbac" ]]; then
+          rbac_enabled=true
+        fi
+        
+        # Check Workload Identity
+        local cluster_wi=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(workloadIdentityConfig.workloadPool)" 2>/dev/null)
+        if [[ -n "$cluster_wi" ]]; then
+          workload_identity=true
+        fi
+      fi
+    done
+    
+    if [[ "$rbac_enabled" == true && "$workload_identity" == true ]]; then
+      status="PASS"
+      result="RBAC is enabled and Workload Identity is configured for GKE clusters."
+    elif [[ "$rbac_enabled" == true ]]; then
+      status="WARN"
+      result="RBAC is enabled but Workload Identity is not configured for all GKE clusters."
+    else
+      status="FAIL"
+      result="RBAC and/or Workload Identity are not properly configured on GKE clusters."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for orchestrator security check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-3.1",
+    "description": "Orchestrator authentication and authorization are securely configured",
+    "controls": "NIST-800-190-4.3.1,AC-2,AC-3,AC-6,IA-2",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable RBAC and configure Workload Identity for all GKE clusters."
+  }
+EOF
+  ))
+  
+  # 3.2 Orchestrator cluster segmentation
+  # Check GKE clusters for network policy and private clusters
+  if [[ -n "$clusters" ]]; then
+    local network_policy=false
+    local private_cluster=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check Network Policy
+        local cluster_np=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(networkPolicy.enabled)" 2>/dev/null)
+        if [[ "$cluster_np" == "true" ]]; then
+          network_policy=true
+        fi
+        
+        # Check Private Cluster
+        local cluster_private=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(privateClusterConfig.enablePrivateNodes)" 2>/dev/null)
+        if [[ "$cluster_private" == "true" ]]; then
+          private_cluster=true
+        fi
+      fi
+    done
+    
+    if [[ "$network_policy" == true && "$private_cluster" == true ]]; then
+      status="PASS"
+      result="GKE clusters have network policies and private node configuration enabled."
+    elif [[ "$network_policy" == true || "$private_cluster" == true ]]; then
+      status="WARN"
+      result="GKE clusters have partial segmentation controls implemented."
+    else
+      status="FAIL"
+      result="GKE clusters lack proper segmentation (neither network policies nor private clusters)."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for orchestrator segmentation check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-3.2",
+    "description": "Container orchestrator has proper cluster segmentation",
+    "controls": "NIST-800-190-4.3.2,SC-7,AC-4,SC-3",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable network policies and configure private GKE clusters."
+  }
+EOF
+  ))
+  
+  # ================ 4. HOST OS SECURITY ================
+  
+  # 4.1 Host OS hardening
+  # Check GKE clusters for shielded nodes, secure boot and integrity monitoring
+  if [[ -n "$clusters" ]]; then
+    local shielded_nodes=false
+    local secure_boot=false
+    local integrity_monitoring=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Check Shielded Nodes 
+        local cluster_shielded=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(shieldedNodes.enabled)" 2>/dev/null)
+        if [[ "$cluster_shielded" == "true" ]]; then
+          shielded_nodes=true
+          # Shielded nodes implies secure boot and integrity monitoring are available
+          # But we need to check node pools to see if they're specifically enabled
+          
+          # Get nodepools for detailed checks
+          local nodepools=$(gcloud container node-pools list --cluster="$cluster" --zone="$zone" --project="$project" --format="value(name)" 2>/dev/null)
+          for nodepool in $nodepools; do
+            # Check secure boot
+            local np_secure_boot=$(gcloud container node-pools describe "$nodepool" --cluster="$cluster" --zone="$zone" --project="$project" --format="value(config.shieldedInstanceConfig.enableSecureBoot)" 2>/dev/null)
+            if [[ "$np_secure_boot" == "true" ]]; then
+              secure_boot=true
+            fi
+            
+            # Check integrity monitoring 
+            local np_integrity=$(gcloud container node-pools describe "$nodepool" --cluster="$cluster" --zone="$zone" --project="$project" --format="value(config.shieldedInstanceConfig.enableIntegrityMonitoring)" 2>/dev/null)
+            if [[ "$np_integrity" == "true" ]]; then
+              integrity_monitoring=true
+            fi
+          done
+        fi
+      fi
+    done
+    
+    if [[ "$shielded_nodes" == true && "$secure_boot" == true && "$integrity_monitoring" == true ]]; then
+      status="PASS"
+      result="GKE clusters use shielded nodes with secure boot and integrity monitoring enabled."
+    elif [[ "$shielded_nodes" == true ]]; then
+      status="WARN"
+      result="GKE clusters use shielded nodes but secure boot and/or integrity monitoring may not be explicitly enabled."
+    else
+      status="FAIL"
+      result="GKE clusters do not use shielded nodes or secure boot features."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for host OS hardening check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-4.1",
+    "description": "Host OS is properly hardened and secured",
+    "controls": "NIST-800-190-4.4.1,CM-6,CM-7,SC-7,SI-7",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Enable shielded nodes, secure boot, and integrity monitoring for all GKE clusters."
+  }
+EOF
+  ))
+  
+  # 4.2 Host OS access restrictions
+  # Check for node service account scopes and metadata concealment
+  if [[ -n "$clusters" ]]; then
+    local limited_scopes=false
+    local metadata_concealed=false
+    
+    for cluster in $clusters; do
+      local zone=$(gcloud container clusters list --project="$project" --filter="name=$cluster" --format="value(zone)" 2>/dev/null)
+      if [[ -n "$zone" ]]; then
+        # Get nodepools to check scopes
+        local nodepools=$(gcloud container node-pools list --cluster="$cluster" --zone="$zone" --project="$project" --format="value(name)" 2>/dev/null)
+        for nodepool in $nodepools; do
+          # Check service account scopes - should not contain "cloud-platform"
+          local np_scopes=$(gcloud container node-pools describe "$nodepool" --cluster="$cluster" --zone="$zone" --project="$project" --format="value(config.oauthScopes)" 2>/dev/null)
+          if [[ -n "$np_scopes" && "$np_scopes" != *"cloud-platform"* ]]; then
+            limited_scopes=true
+          fi
+        done
+        
+        # Check metadata concealment
+        local metadata_disabled=$(gcloud container clusters describe "$cluster" --zone="$zone" --project="$project" --format="value(nodeConfig.metadata['disable-legacy-endpoints'])" 2>/dev/null)
+        if [[ "$metadata_disabled" == "true" ]]; then
+          metadata_concealed=true
+        fi
+      fi
+    done
+    
+    if [[ "$limited_scopes" == true && "$metadata_concealed" == true ]]; then
+      status="PASS"
+      result="GKE clusters have properly limited node service account scopes and concealed metadata."
+    elif [[ "$limited_scopes" == true || "$metadata_concealed" == true ]]; then
+      status="WARN"
+      result="GKE clusters have partially implemented host access restrictions."
+    else
+      status="FAIL"
+      result="GKE clusters have overly permissive node service account scopes and/or exposed metadata."
+    fi
+  else
+    status="INFO"
+    result="No GKE clusters found for host OS access restriction check."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-4.2",
+    "description": "Host OS access is properly restricted and secured",
+    "controls": "NIST-800-190-4.4.2,AC-3,AC-5,AC-6,CM-7",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Configure limited OAuth scopes for node service accounts and enable metadata concealment."
+  }
+EOF
+  ))
+  
+  # ================ 5. CONTAINER SUPPLY CHAIN SECURITY ================
+  
+  # 5.1 Build pipeline security
+  # Check Cloud Build with Binary Authorization integration
+  local cloudbuild_enabled=$(gcloud services list --project="$project" --filter="config.name=cloudbuild.googleapis.com" --format="value(config.name)" 2>/dev/null)
+  if [[ -n "$cloudbuild_enabled" && -n "$binauth_enabled" ]]; then
+    # Check for builds that include container analysis steps
+    local build_triggers=$(gcloud builds triggers list --project="$project" --format="json" 2>/dev/null)
+    if [[ -n "$build_triggers" && "$build_triggers" != "[]" ]]; then
+      # Look for container analysis and vulnerability scanning steps
+      if [[ "$build_triggers" == *"containeranalysis"* || "$build_triggers" == *"vulnerability"* || "$build_triggers" == *"kritis"* ]]; then
+        status="PASS"
+        result="Cloud Build is configured with container security scanning steps."
+      else
+        status="WARN"
+        result="Cloud Build is configured but may not include container security scanning steps."
+      fi
+    else
+      status="WARN"
+      result="Cloud Build is enabled but no build triggers are configured."
+    fi
+  else
+    status="FAIL"
+    result="Cloud Build and/or Binary Authorization are not enabled for secure CI/CD pipeline."
+  fi
+  
+  checks+=($(cat << EOF
+  {
+    "id": "CNTR-800-190-5.1",
+    "description": "Container build pipeline includes security scanning and signing",
+    "controls": "NIST-800-190-4.1.4,SA-10,CM-3,CM-14,SR-4",
+    "severity": "High",
+    "status": "$status",
+    "result": "$result",
+    "remediation": "Configure Cloud Build with container analysis steps and integrate with Binary Authorization."
+  }
+EOF
+  ))
+  
+  # Convert all checks to JSON array
+  local json_checks=$(for check in "${checks[@]}"; do echo "$check"; done | jq -s .)
+  echo "$json_checks"
 }
 
 # Enhanced main function
