@@ -199,10 +199,21 @@ When run with the `--export-evidence` flag, additional artifacts are collected:
      - Container secrets management implementation
      - Container incident response capabilities
 
-2. **FedRAMP Documentation Artifacts**:
-   - Control coverage summaries formatted for FedRAMP packages
-   - Configurations in assessment-ready format
-   - Direct exports for supporting documentation
+2. **FedRAMP-Specific Evidence Collection**:
+   - Comprehensive evidence organized by FedRAMP control families
+   - Specific evidence for Low, Moderate, or High impact controls based on selected level
+   - Technical configuration exports mapped directly to individual controls
+   - Evidence linked directly to control IDs for auditor review
+   - FedRAMP control implementation statements for System Security Plan
+   - Complete evidence index with navigation structure
+   - Control coverage analysis for FedRAMP packages
+
+3. **System Security Plan Implementation Statements**:
+   - Pre-populated control implementation statements for SSP documentation
+   - Evidence-based implementation details
+   - Tailored to selected FedRAMP level (Low, Moderate, High)
+   - Container-specific implementation details
+   - Human-readable format suitable for inclusion in FedRAMP packages
 
 ### System Security Plan Generation (with `--ssp-template` flag)
 

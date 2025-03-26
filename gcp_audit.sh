@@ -373,7 +373,544 @@ EOF
   # Generate evidence collection if requested
   if [ "$EXPORT_EVIDENCE" == "true" ]; then
     generate_evidence_collection "$project"
+    
+    # Generate FedRAMP-specific evidence if needed
+    if [[ -n "$FEDRAMP_LEVEL" ]]; then
+      generate_fedramp_evidence "$project" "$FEDRAMP_LEVEL"
+    fi
   fi
+}
+
+# Function to generate FedRAMP-specific evidence
+generate_fedramp_evidence() {
+  local project="$1"
+  local fedramp_level="$2"
+  local fedramp_dir="$OUTPUT_DIR/fedramp_evidence"
+  
+  echo -e "${BLUE}Generating FedRAMP-specific evidence for project: $project${NC}"
+  echo -e "${BLUE}FedRAMP level: $(echo $fedramp_level | tr '[:lower:]' '[:upper:]')${NC}"
+  
+  mkdir -p "$fedramp_dir"
+  
+  # Create FedRAMP evidence index
+  local index_file="$fedramp_dir/evidence_index.md"
+  
+  cat > "$index_file" << EOF
+# FedRAMP $(echo $fedramp_level | tr '[:lower:]' '[:upper:]') Evidence Collection
+
+## Overview
+This evidence collection is organized according to FedRAMP $(echo $fedramp_level | tr '[:lower:]' '[:upper:]') control families. Each section contains technical evidence of control implementation within the Google Cloud Platform environment.
+
+## Project Information
+- **Project ID**: $project
+- **Scan Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+- **FedRAMP Level**: $(echo $fedramp_level | tr '[:lower:]' '[:upper:]')
+
+## Control Families
+EOF
+  
+  # Create evidence directories and indexes for each control family
+  local control_families=("AC" "AU" "CA" "CM" "CP" "IA" "IR" "MA" "MP" "PE" "PL" "PS" "RA" "SA" "SC" "SI" "SR")
+  local family_names=(
+    "Access Control"
+    "Audit and Accountability"
+    "Assessment, Authorization, and Monitoring"
+    "Configuration Management"
+    "Contingency Planning"
+    "Identification and Authentication"
+    "Incident Response"
+    "Maintenance"
+    "Media Protection"
+    "Physical and Environmental Protection"
+    "Planning"
+    "Personnel Security"
+    "Risk Assessment"
+    "System and Services Acquisition"
+    "System and Communications Protection"
+    "System and Information Integrity"
+    "Supply Chain Risk Management"
+  )
+  
+  for i in "${!control_families[@]}"; do
+    local family="${control_families[$i]}"
+    local name="${family_names[$i]}"
+    local family_dir="$fedramp_dir/$family"
+    mkdir -p "$family_dir"
+    
+    # Add to main index
+    echo "- [$family - $name]($family/README.md)" >> "$index_file"
+    
+    # Create family index
+    cat > "$family_dir/README.md" << EOF
+# $family - $name
+
+## Control Implementation Evidence
+
+This directory contains technical evidence for FedRAMP controls in the $name family.
+
+## Controls Coverage
+EOF
+    
+    # Create evidence for controls based on FedRAMP level
+    case "$fedramp_level" in
+      low)
+        # Generate only Low impact controls
+        generate_control_evidence "$project" "$family" "L" "$family_dir"
+        ;;
+      moderate)
+        # Generate Low and Moderate impact controls
+        generate_control_evidence "$project" "$family" "L" "$family_dir"
+        generate_control_evidence "$project" "$family" "M" "$family_dir"
+        ;;
+      high)
+        # Generate all controls
+        generate_control_evidence "$project" "$family" "L" "$family_dir"
+        generate_control_evidence "$project" "$family" "M" "$family_dir"
+        generate_control_evidence "$project" "$family" "H" "$family_dir"
+        ;;
+    esac
+  done
+  
+  # Generate System Security Plan template with control implementation statements
+  generate_ssp_implementation "$project" "$fedramp_level" "$fedramp_dir"
+  
+  # Generate specific evidence for NIST SP 800-190 container security
+  generate_container_security_evidence "$project" "$fedramp_dir"
+  
+  echo -e "${GREEN}FedRAMP-specific evidence generated in: $fedramp_dir${NC}"
+}
+
+# Function to generate control evidence for a specific impact level
+generate_control_evidence() {
+  local project="$1"
+  local family="$2"
+  local impact="$3"
+  local output_dir="$4"
+  
+  # Get all checks from the compliance report
+  local compliance_file="$OUTPUT_DIR/${REPORT_PREFIX}_compliance_$project.json"
+  
+  if [[ ! -f "$compliance_file" ]]; then
+    echo -e "${YELLOW}WARNING: Compliance report not found: $compliance_file${NC}"
+    return
+  fi
+  
+  # Extract controls relevant to this family and impact level
+  local controls=$(jq -r --arg family "$family" --arg impact "$impact" '.categories | to_entries[] | .value[] | select(.controls | contains($family)) | select(.controls | contains("-" + $impact))' "$compliance_file")
+  
+  if [[ -z "$controls" ]]; then
+    echo "No $impact-impact controls found for $family family." >> "$output_dir/README.md"
+    return
+  fi
+  
+  # Get a list of unique control IDs
+  local control_ids=$(echo "$controls" | jq -r '.controls' | grep -o "$family-[0-9]\\+.*" | sort -u)
+  
+  for control_id in $control_ids; do
+    # Create control evidence file
+    local control_file="$output_dir/${control_id}.md"
+    local base_id=$(echo "$control_id" | cut -d'-' -f1,2)
+    local checks=$(echo "$controls" | jq -r --arg cid "$base_id" 'select(.controls | contains($cid))')
+    
+    cat > "$control_file" << EOF
+# $control_id Evidence
+
+## Control Information
+- **Control ID**: $control_id
+- **Control Family**: $family
+- **Impact Level**: $impact
+
+## Implementation Evidence
+The following technical evidence demonstrates implementation of this control:
+
+EOF
+    
+    # Add specific evidence for this control
+    echo "$checks" | while read -r check; do
+      local id=$(echo "$check" | jq -r '.id')
+      local desc=$(echo "$check" | jq -r '.description')
+      local status=$(echo "$check" | jq -r '.status')
+      local result=$(echo "$check" | jq -r '.result')
+      
+      cat >> "$control_file" << EOF
+### Check: $id - $desc
+- **Status**: $status
+- **Result**: $result
+EOF
+      
+      # Add technical evidence based on category
+      local category=$(echo "$controls" | jq -r --arg id "$id" 'select(.id == $id) | .category')
+      case "$category" in
+        *"iam"*)
+          echo -e "\n#### IAM Evidence" >> "$control_file"
+          gcloud projects get-iam-policy "$project" --format=json 2>/dev/null | jq '.' >> "$control_file"
+          ;;
+        *"network"*)
+          echo -e "\n#### Network Evidence" >> "$control_file"
+          gcloud compute networks list --project="$project" --format=json 2>/dev/null | jq '.' >> "$control_file"
+          ;;
+        *"compute"* | *"gke"*)
+          echo -e "\n#### Compute/GKE Evidence" >> "$control_file"
+          if [[ "$id" == *"GKE"* || "$category" == *"gke"* ]]; then
+            gcloud container clusters list --project="$project" --format=json 2>/dev/null | jq '.' >> "$control_file"
+          else
+            gcloud compute instances list --project="$project" --format=json 2>/dev/null | jq '.' >> "$control_file"
+          fi
+          ;;
+        *"storage"*)
+          echo -e "\n#### Storage Evidence" >> "$control_file"
+          gcloud storage ls --project="$project" --json 2>/dev/null | head -20 | jq '.' >> "$control_file"
+          ;;
+        *)
+          echo -e "\n#### General Configuration Evidence" >> "$control_file"
+          gcloud config list --project="$project" 2>/dev/null >> "$control_file"
+          ;;
+      esac
+    done
+    
+    # Add to family index
+    echo "- [$control_id](./${control_id}.md)" >> "$output_dir/README.md"
+  done
+}
+
+# Function to generate container security specific evidence for FedRAMP
+generate_container_security_evidence() {
+  local project="$1"
+  local output_dir="$2"
+  local container_dir="$output_dir/ContainerSecurity"
+  
+  mkdir -p "$container_dir"
+  
+  cat > "$container_dir/README.md" << EOF
+# NIST SP 800-190 Container Security
+
+## Overview
+This evidence collection provides documentation of container security controls implemented in accordance with NIST SP 800-190 Application Container Security Guide.
+
+## Project Information
+- **Project ID**: $project
+- **Scan Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+## Container Security Controls
+
+EOF
+  
+  # Get all container security checks from the compliance report
+  local compliance_file="$OUTPUT_DIR/${REPORT_PREFIX}_compliance_$project.json"
+  
+  if [[ ! -f "$compliance_file" ]]; then
+    echo -e "${YELLOW}WARNING: Compliance report not found: $compliance_file${NC}"
+    return
+  fi
+  
+  # Extract container-specific controls
+  local container_checks=$(jq -r '.categories.container_800_190[]' "$compliance_file")
+  
+  if [[ -z "$container_checks" ]]; then
+    echo "No container security checks found." >> "$container_dir/README.md"
+    return
+  fi
+  
+  # Create a detailed evidence file for each container security section
+  local sections=("Image Security" "Container Runtime Security" "Orchestrator Security" "Host OS Security" "Container Supply Chain Security" "Container Runtime Protection" "Container Logging and Monitoring" "Container Network Security" "Container Secrets Management" "Container Incident Response")
+  local section_ids=(1 2 3 4 5 6 7 8 9 10)
+  
+  for i in "${!sections[@]}"; do
+    local section="${sections[$i]}"
+    local section_id="${section_ids[$i]}"
+    local section_file="$container_dir/section_${section_id}_${section// /_}.md"
+    local section_checks=$(echo "$container_checks" | jq -r --arg id "CNTR-800-190-$section_id" 'select(.id | startswith($id))')
+    
+    if [[ -z "$section_checks" ]]; then
+      continue
+    fi
+    
+    cat > "$section_file" << EOF
+# $section
+
+## Overview
+This section provides evidence for NIST SP 800-190 $section controls.
+
+## Control Implementation Evidence
+
+EOF
+    
+    # Add each check in this section
+    echo "$section_checks" | while read -r check; do
+      local id=$(echo "$check" | jq -r '.id')
+      local desc=$(echo "$check" | jq -r '.description')
+      local status=$(echo "$check" | jq -r '.status')
+      local result=$(echo "$check" | jq -r '.result')
+      local controls=$(echo "$check" | jq -r '.controls')
+      
+      cat >> "$section_file" << EOF
+### $id - $desc
+- **Status**: $status
+- **Result**: $result
+- **Related Controls**: $controls
+
+#### Technical Evidence
+EOF
+      
+      # Add specific container security evidence based on the check ID
+      case "$id" in
+        *"1.1"*)  # Image vulnerability scanning
+          gcloud container images list --project="$project" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          echo -e "\n**Container Analysis API Status:**" >> "$section_file"
+          gcloud services list --project="$project" --filter="config.name=containeranalysis.googleapis.com" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *"1.2"*)  # Binary Authorization
+          echo -e "\n**Binary Authorization Status:**" >> "$section_file"
+          gcloud services list --project="$project" --filter="config.name=binaryauthorization.googleapis.com" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *"2"*|*"3"*|*"4"*)  # GKE-related checks
+          echo -e "\n**GKE Cluster Configurations:**" >> "$section_file"
+          gcloud container clusters list --project="$project" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *"6.1"*)  # RASP
+          echo -e "\n**Runtime Protection Solutions:**" >> "$section_file"
+          gcloud container clusters list --project="$project" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *"7"*)    # Logging and monitoring
+          echo -e "\n**Logging Configuration:**" >> "$section_file"
+          gcloud logging sinks list --project="$project" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          echo -e "\n**Monitoring Configuration:**" >> "$section_file"
+          gcloud monitoring policies list --project="$project" --format=json 2>/dev/null | jq '.' 2>/dev/null >> "$section_file" || echo "No monitoring policies found" >> "$section_file"
+          ;;
+        *"8"*)    # Network security
+          echo -e "\n**Network Policies:**" >> "$section_file"
+          gcloud container clusters list --project="$project" --format=json 2>/dev/null | jq '.[] | {name: .name, networkPolicy: .networkPolicy}' >> "$section_file"
+          ;;
+        *"9"*)    # Secrets management
+          echo -e "\n**Secret Manager Status:**" >> "$section_file"
+          gcloud services list --project="$project" --filter="config.name=secretmanager.googleapis.com" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *"10"*)   # Incident response
+          echo -e "\n**Security Command Center Status:**" >> "$section_file"
+          gcloud services list --project="$project" --filter="config.name=securitycenter.googleapis.com" --format=json 2>/dev/null | jq '.' >> "$section_file"
+          ;;
+        *)
+          echo "General GCP configuration information" >> "$section_file"
+          ;;
+      esac
+    done
+    
+    # Add to main index
+    echo "- [${section}](./section_${section_id}_${section// /_}.md)" >> "$container_dir/README.md"
+  done
+  
+  # Add to FedRAMP evidence index
+  cat >> "$output_dir/evidence_index.md" << EOF
+
+## Container Security (NIST SP 800-190)
+- [Container Security Evidence](./ContainerSecurity/README.md)
+EOF
+}
+
+# Function to generate SSP implementation statements
+generate_ssp_implementation() {
+  local project="$1"
+  local fedramp_level="$2"
+  local output_dir="$3"
+  local ssp_dir="$output_dir/SSP"
+  
+  mkdir -p "$ssp_dir"
+  
+  # Create SSP index
+  cat > "$ssp_dir/README.md" << EOF
+# System Security Plan Implementation Statements
+
+## Overview
+This directory contains implementation statements for FedRAMP $(echo $fedramp_level | tr '[:lower:]' '[:upper:]') controls.
+These statements can be copied directly into a System Security Plan (SSP) document.
+
+## Project Information
+- **Project ID**: $project
+- **Scan Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+- **FedRAMP Level**: $(echo $fedramp_level | tr '[:lower:]' '[:upper:]')
+
+## Control Families
+EOF
+  
+  # Create implementation statements for each control family
+  local control_families=("AC" "AU" "CA" "CM" "CP" "IA" "IR" "MA" "MP" "PE" "PL" "PS" "RA" "SA" "SC" "SI" "SR")
+  local family_names=(
+    "Access Control"
+    "Audit and Accountability"
+    "Assessment, Authorization, and Monitoring"
+    "Configuration Management"
+    "Contingency Planning"
+    "Identification and Authentication"
+    "Incident Response"
+    "Maintenance"
+    "Media Protection"
+    "Physical and Environmental Protection"
+    "Planning"
+    "Personnel Security"
+    "Risk Assessment"
+    "System and Services Acquisition"
+    "System and Communications Protection"
+    "System and Information Integrity"
+    "Supply Chain Risk Management"
+  )
+  
+  for i in "${!control_families[@]}"; do
+    local family="${control_families[$i]}"
+    local name="${family_names[$i]}"
+    local family_file="$ssp_dir/${family}_Implementation.md"
+    
+    # Add to main index
+    echo "- [$family - $name](./${family}_Implementation.md)" >> "$ssp_dir/README.md"
+    
+    # Create family implementation file
+    cat > "$family_file" << EOF
+# $family - $name Implementation Statements
+
+## Overview
+This document provides implementation statements for FedRAMP $(echo $fedramp_level | tr '[:lower:]' '[:upper:]') controls in the $name family.
+These statements can be copied directly into a System Security Plan (SSP) document.
+
+## Control Implementation Statements
+EOF
+    
+    # Get the compliance report
+    local compliance_file="$OUTPUT_DIR/${REPORT_PREFIX}_compliance_$project.json"
+    
+    if [[ ! -f "$compliance_file" ]]; then
+      echo -e "${YELLOW}WARNING: Compliance report not found: $compliance_file${NC}"
+      continue
+    fi
+    
+    # Extract controls for this family
+    local controls=$(jq -r --arg family "$family" '.categories | to_entries[] | .value[] | select(.controls | contains($family))' "$compliance_file")
+    
+    if [[ -z "$controls" ]]; then
+      echo "No controls found for $family family." >> "$family_file"
+      continue
+    fi
+    
+    # Get a list of unique control IDs
+    local control_ids=$(echo "$controls" | jq -r '.controls' | grep -o "$family-[0-9]\\+.*" | sort -u)
+    
+    for control_id in $control_ids; do
+      # Get relevant checks for this control
+      local checks=$(echo "$controls" | jq -r --arg cid "$control_id" 'select(.controls | contains($cid))')
+      
+      # Create implementation statement template
+      cat >> "$family_file" << EOF
+
+### $control_id
+
+#### Implementation Statement
+The system implements $control_id through the following mechanisms:
+
+EOF
+      
+      # Add evidence-based implementation details
+      echo "$checks" | while read -r check; do
+        local desc=$(echo "$check" | jq -r '.description')
+        local status=$(echo "$check" | jq -r '.status')
+        local result=$(echo "$check" | jq -r '.result')
+        local remediation=$(echo "$check" | jq -r '.remediation')
+        
+        # Only include PASS/WARN statuses in implementation statements
+        if [[ "$status" == "PASS" || "$status" == "WARN" ]]; then
+          cat >> "$family_file" << EOF
+- **$desc**: $result
+EOF
+        fi
+      done
+      
+      # Add container security details if relevant
+      local container_controls=$(jq -r --arg cid "$control_id" '.categories.container_800_190[] | select(.controls | contains($cid))' "$compliance_file" 2>/dev/null)
+      
+      if [[ -n "$container_controls" ]]; then
+        cat >> "$family_file" << EOF
+
+#### Container Security Implementation
+For containerized components, the system also implements:
+
+EOF
+        
+        echo "$container_controls" | while read -r check; do
+          local desc=$(echo "$check" | jq -r '.description')
+          local status=$(echo "$check" | jq -r '.status')
+          local result=$(echo "$check" | jq -r '.result')
+          
+          # Only include PASS/WARN statuses
+          if [[ "$status" == "PASS" || "$status" == "WARN" ]]; then
+            cat >> "$family_file" << EOF
+- **$desc**: $result
+EOF
+          fi
+        done
+      fi
+    done
+  done
+  
+  # Add specific NIST SP 800-190 implementation section
+  cat > "$ssp_dir/NIST_800-190_Implementation.md" << EOF
+# NIST SP 800-190 Container Security Implementation
+
+## Overview
+This document provides implementation statements for container security controls based on NIST SP 800-190 Application Container Security Guide.
+These statements can be copied directly into a System Security Plan (SSP) document.
+
+## Container Security Implementation
+EOF
+  
+  # Get container security checks
+  local container_checks=$(jq -r '.categories.container_800_190[]' "$compliance_file" 2>/dev/null)
+  
+  if [[ -z "$container_checks" ]]; then
+    echo "No container security checks found." >> "$ssp_dir/NIST_800-190_Implementation.md"
+  else
+    # Create implementation statements for each container security section
+    local sections=("Image Security" "Container Runtime Security" "Orchestrator Security" "Host OS Security" "Container Supply Chain Security" "Container Runtime Protection" "Container Logging and Monitoring" "Container Network Security" "Container Secrets Management" "Container Incident Response")
+    local section_ids=(1 2 3 4 5 6 7 8 9 10)
+    
+    for i in "${!sections[@]}"; do
+      local section="${sections[$i]}"
+      local section_id="${section_ids[$i]}"
+      
+      cat >> "$ssp_dir/NIST_800-190_Implementation.md" << EOF
+
+### $section
+
+#### Implementation Statement
+The system implements $section controls through the following mechanisms:
+
+EOF
+      
+      # Get checks for this section
+      local section_checks=$(echo "$container_checks" | jq -r --arg id "CNTR-800-190-$section_id" 'select(.id | startswith($id))')
+      
+      echo "$section_checks" | while read -r check; do
+        local desc=$(echo "$check" | jq -r '.description')
+        local status=$(echo "$check" | jq -r '.status')
+        local result=$(echo "$check" | jq -r '.result')
+        
+        # Only include PASS/WARN statuses
+        if [[ "$status" == "PASS" || "$status" == "WARN" ]]; then
+          cat >> "$ssp_dir/NIST_800-190_Implementation.md" << EOF
+- **$desc**: $result
+EOF
+        fi
+      done
+    done
+  fi
+  
+  # Add to SSP index
+  cat >> "$ssp_dir/README.md" << EOF
+- [NIST SP 800-190 Container Security](./NIST_800-190_Implementation.md)
+EOF
+  
+  # Add to FedRAMP evidence index
+  cat >> "$output_dir/evidence_index.md" << EOF
+
+## System Security Plan
+- [SSP Implementation Statements](./SSP/README.md)
+EOF
 }
 
 # Function to check NIST SP 800-190 Container Security compliance
